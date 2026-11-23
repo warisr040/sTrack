@@ -1056,7 +1056,7 @@ async function dbSync(force) {
     if ((DB.gen || 0) !== gen) return;
     { let J = null; try { J = text && text.trim() ? JSON.parse(text) : null; } catch (_) { } dbVersionCheck(J);
       if (DB.ro) { // follow the team plan, never write
-        if (J) { const before = plain(); P = normalize(J); if (plain() !== before) { compute(); persist(); if (uiBusy()) DB.needRender = true; else render(); } }
+        if (J) { const before = plain(); P = normalize(J); compute(); if (plain() !== before) { persist(); if (uiBusy()) DB.needRender = true; else render(); } }
         DB.mtime = mtime; DB.dirty = false; DB.last = Date.now(); setDb('ok'); return;
       } } // disconnected meanwhile (new project / opened a file): leave the plan alone
     const R = text && text.trim() ? normalize(JSON.parse(text)) : null;
@@ -1067,6 +1067,7 @@ async function dbSync(force) {
       const M = mergeP(L, R, { mine: MY }); conflicts = M._conflicts || []; delete M._conflicts;
       P = normalize(M);
     } else P = normalize(JSON.parse(before));
+    compute(); // the plan object was replaced: rebuild the task tree now, even when nothing changed (clicks read it)
     P.pres = P.pres.filter(x => Date.now() - (x.at || 0) < 600000);
     const merged = plain();
     if (!R || merged !== JSON.stringify(R)) DB.mtime = await A.write(serialize()); else DB.mtime = mtime;
