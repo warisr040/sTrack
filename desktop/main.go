@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -272,29 +271,6 @@ func main() {
 		return out(map[string]any{"ok": true})
 	})
 
-	// Classic Outlook on this PC: read calendar items (start, end, busy status, all-day, response) between two dates.
-	// Uses Outlook's own automation through PowerShell. Nothing leaves the computer; titles are not read.
-	_ = w.Bind("stOutlook", func(from, to string) string {
-		day := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
-		if !day.MatchString(from) || !day.MatchString(to) {
-			return out(map[string]any{"ok": false, "err": "bad dates"})
-		}
-		ps := `$ErrorActionPreference='Stop';
-try { $ol = New-Object -ComObject Outlook.Application } catch { Write-Output '{"ok":false,"err":"noOutlook"}'; exit }
-$ns = $ol.GetNamespace('MAPI'); $cal = $ns.GetDefaultFolder(9)
-$a = [datetime]::ParseExact('` + from + `','yyyy-MM-dd',$null); $b = [datetime]::ParseExact('` + to + `','yyyy-MM-dd',$null).AddDays(1)
-$items = $cal.Items; $items.IncludeRecurrences = $true; $items.Sort('[Start]')
-$r = $items.Restrict("[Start] < '" + $b.ToString('g') + "' AND [End] > '" + $a.ToString('g') + "'")
-$list = @(); foreach ($i in $r) { if ($i.Start -ge $b) { break }; $list += [pscustomobject]@{ s = $i.Start.ToString('yyyy-MM-ddTHH:mm'); e = $i.End.ToString('yyyy-MM-ddTHH:mm'); b = [int]$i.BusyStatus; a = [bool]$i.AllDayEvent; r = [int]$i.ResponseStatus } }
-@{ ok = $true; items = $list } | ConvertTo-Json -Depth 3 -Compress`
-		cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-		b, err := cmd.Output()
-		if err != nil {
-			return fail(err)
-		}
-		return string(b)
-	})
 
 	w.SetSize(1100, 700, webview2.HintMin)
 	w.SetSize(1480, 920, webview2.HintNone)

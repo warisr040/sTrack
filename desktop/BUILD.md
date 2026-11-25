@@ -13,5 +13,6 @@ To rebuild after editing the site:
        go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
        goversioninfo -64 -o rsrc_windows_amd64.syso versioninfo.json
 3. Build:
-       go build -trimpath -ldflags "-s -w -H windowsgui" -o sTrack.exe .
+       go build -trimpath -ldflags "-H windowsgui" -o sTrack.exe .
+   (Keep the debug information: do not add -s -w. Stripped Go programs are more often flagged by antivirus heuristics.)
    (From Linux/macOS add: GOOS=windows GOARCH=amd64 CGO_ENABLED=0)

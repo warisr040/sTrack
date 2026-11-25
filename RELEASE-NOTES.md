@@ -7,6 +7,8 @@
   - Each PC asks for the password once and remembers the key (it can't be read back as the password). **Change team password…** and **Forget password on this PC** are in Team database (Alt+W). After a change, everyone else is asked for the new password on their next sync.
   - If everyone forgets the password, the plan in that file cannot be recovered. Plan files saved with Ctrl+S, exports and the local copy on each PC are not encrypted.
   - The lock file next to the database no longer contains the computer name.
+- **The Outlook link is removed.** sTrack no longer starts PowerShell in the background to read classic Outlook (that is what antivirus programs such as Windows Defender can mistake for a Trojan). Import your own calendar instead: export it from Outlook, Google Calendar or Teams as an **.ics** file and use **Import calendar file (.ics)…** in a member's Schedule (Team page). Busy times imported earlier stay.
+- The Windows app is now built with its debug information kept (not stripped), which antivirus heuristics treat as less suspicious.
 - **Protection against crafted plan files.** A plan file or team database edited by someone else can no longer run code in sTrack:
   - IDs, dates, colours, photos and numbers are checked whenever a plan is opened, synced, merged or restored, so they can't turn into code.
   - Only sTrack's own script can run (the page refuses any other script or inline handler), and the page can't connect to the internet.
