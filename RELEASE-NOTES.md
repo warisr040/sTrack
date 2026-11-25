@@ -1,5 +1,17 @@
 # sTrack (simply handle IT Track) — release notes
 
+## Version 3.5
+- **Encrypted team database.** The shared database file is encrypted with a **team password** (AES-256-GCM; the key is made from the password with PBKDF2-SHA256, 600 000 rounds). Everything in it is protected: tasks, notes, timesheet, team details and photos, Outlook busy times and backups.
+  - **New database:** you set the team password when you create it.
+  - **Existing database:** the first time sTrack 3.5 connects to an older, unencrypted one, it asks you to set a team password and encrypts the file. Update **everyone** to 3.5 first: 3.3 and 3.4 then only show "🔒 Encrypted team database: update sTrack" (read-only, nothing is written), and versions before 3.3 could overwrite it.
+  - Each PC asks for the password once and remembers the key (it can't be read back as the password). **Change team password…** and **Forget password on this PC** are in Team database (Alt+W). After a change, everyone else is asked for the new password on their next sync.
+  - If everyone forgets the password, the plan in that file cannot be recovered. Plan files saved with Ctrl+S, exports and the local copy on each PC are not encrypted.
+  - The lock file next to the database no longer contains the computer name.
+- **Protection against crafted plan files.** A plan file or team database edited by someone else can no longer run code in sTrack:
+  - IDs, dates, colours, photos and numbers are checked whenever a plan is opened, synced, merged or restored, so they can't turn into code.
+  - Only sTrack's own script can run (the page refuses any other script or inline handler), and the page can't connect to the internet.
+  - Windows app: the window can't navigate to or load anything outside sTrack, pop-up windows are refused, and the database functions only work on a `.json` file, so they can't be used to read or write (for example plant a program in) any other file.
+
 ## Version 3.4
 - **Fold or unfold the whole Gantt by indent level.** A new box on the Gantt toolbar (next to the task filter) shows **Level 1 only**, **Levels 1–2**, **Levels 1–3** … or **Unfold all**. **Alt+L** steps through them. The arrow beside a task name still folds one group; when the folding no longer matches a level the box shows "Custom folding". If the selected task gets hidden, the selection moves to its visible parent.
 - **Copy, cut, paste and duplicate rows on the Gantt.** Click a row (Ctrl / Shift for several) and press **Ctrl+C**; a group row brings its sub-tasks. Click the row to paste under and press **Ctrl+V**: the rows go right below it (after its sub-tasks, same indent). Click the empty space under the last row to paste at the end. **Ctrl+X** works like Excel: the rows get a dashed outline and move when you paste, keeping their links and timesheet hours (**Esc** cancels). **Ctrl+D** duplicates below. All four are in the right-click menu.

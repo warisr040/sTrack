@@ -4,6 +4,7 @@
 package webview2
 
 import (
+	"strings"
 	"encoding/json"
 	"errors"
 	"log"
@@ -124,9 +125,26 @@ func NewWithOptions(options WebViewOptions) WebView {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// sTrack: the page may only talk to its own local server. Every other request (a link, a navigation,
+	// an image or a form to a website) is answered here with 403 and never leaves the PC.
+	chromium.WebResourceRequestedCallback = func(req *edge.ICoreWebView2WebResourceRequest, args *edge.ICoreWebView2WebResourceRequestedEventArgs) {
+		uri, _ := req.GetUri()
+		if AllowedOrigin != "" && strings.HasPrefix(uri, AllowedOrigin) {
+			return
+		}
+		if env := chromium.Environment(); env != nil {
+			if resp, err := env.CreateWebResourceResponse(nil, 403, "Blocked by sTrack", ""); err == nil {
+				_ = args.PutResponse(resp)
+			}
+		}
+	}
+	chromium.AddWebResourceRequestedFilter("*", edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL)
 
 	return w
 }
+
+// AllowedOrigin (sTrack) is the only URL prefix the page may load, e.g. "http://127.0.0.1:47393/".
+var AllowedOrigin string
 
 type rpcMessage struct {
 	ID     int               `json:"id"`

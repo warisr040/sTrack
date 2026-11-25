@@ -5,6 +5,9 @@
 package main
 
 import (
+	"encoding/base64"
+	"crypto/sha256"
+	"strings"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -127,11 +130,18 @@ func pickFile(owner uintptr, start, title string) (string, bool) {
 
 func main() {
 	ln := listen()
+	// Only sTrack's own script may run (by hash): injected inline handlers or scripts are refused,
+	// and the page can't connect anywhere.
+	csp := "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'"
+	if m := regexp.MustCompile(`(?s)<script>(.*?)</script>`).FindSubmatch(page); m != nil {
+		sum := sha256.Sum256(m[1])
+		csp += "; script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'")
+		w.Header().Set("Content-Security-Policy", csp)
 		w.Write(page)
 	})
 	go http.Serve(ln, mux)
@@ -139,12 +149,13 @@ func main() {
 	dataDir := filepath.Join(os.Getenv("LOCALAPPDATA"), "sTrack")
 	_ = os.MkdirAll(dataDir, 0o755)
 
+	webview2.AllowedOrigin = "http://" + ln.Addr().String() + "/" // nothing else may be loaded or navigated to
 	w := webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     false,
 		AutoFocus: true,
 		DataPath:  dataDir,
 		WindowOptions: webview2.WindowOptions{
-			Title:  "sTrack 3.4 — simply handle IT Track",
+			Title:  "sTrack 3.5 — simply handle IT Track",
 			Width:  1480,
 			Height: 920,
 			IconId: 2,
@@ -177,7 +188,18 @@ func main() {
 		_, err := os.Stat(p)
 		return out(map[string]any{"ok": true, "path": p, "exists": err == nil})
 	})
+	// The page may only touch the team database: a .json file given by full path (plus its .lock and
+	// a temporary file next to it, made here). A crafted plan can't use these to read or write other files.
+	dbPathOK := func(p string) error {
+		if p == "" || strings.ContainsRune(p, 0) || !filepath.IsAbs(p) || !strings.EqualFold(filepath.Ext(p), ".json") {
+			return fmt.Errorf("only a team database file (.json, full path) can be used")
+		}
+		return nil
+	}
 	_ = w.Bind("stDbStat", func(p string) string {
+		if err := dbPathOK(p); err != nil {
+			return fail(err)
+		}
 		st, err := os.Stat(p)
 		if err != nil {
 			return fail(err)
@@ -185,6 +207,9 @@ func main() {
 		return out(map[string]any{"ok": true, "mtime": fingerprint(st)})
 	})
 	_ = w.Bind("stDbRead", func(p string) string {
+		if err := dbPathOK(p); err != nil {
+			return fail(err)
+		}
 		b, err := os.ReadFile(p)
 		if err != nil {
 			return fail(err)
@@ -196,6 +221,9 @@ func main() {
 		return out(map[string]any{"ok": true, "text": string(b), "mtime": fingerprint(st)})
 	})
 	_ = w.Bind("stDbWrite", func(p, text string) string {
+		if err := dbPathOK(p); err != nil {
+			return fail(err)
+		}
 		tmp := p + ".tmp-" + strconv.Itoa(os.Getpid())
 		if err := os.WriteFile(tmp, []byte(text), 0o644); err != nil {
 			return fail(err)
@@ -211,13 +239,15 @@ func main() {
 		return out(map[string]any{"ok": true, "mtime": fingerprint(st)})
 	})
 	_ = w.Bind("stDbLock", func(p string) string {
+		if err := dbPathOK(p); err != nil {
+			return fail(err)
+		}
 		lock := p + ".lock"
-		host, _ := os.Hostname()
 		deadline := time.Now().Add(6 * time.Second)
 		for {
 			f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 			if err == nil {
-				fmt.Fprintf(f, "%s %d %s", host, os.Getpid(), time.Now().Format(time.RFC3339))
+				fmt.Fprintf(f, "sTrack lock %d %s", os.Getpid(), time.Now().Format(time.RFC3339)) // no computer name in the shared folder
 				f.Close()
 				return out(map[string]any{"ok": true})
 			}
@@ -235,6 +265,9 @@ func main() {
 		}
 	})
 	_ = w.Bind("stDbUnlock", func(p string) string {
+		if err := dbPathOK(p); err != nil {
+			return fail(err)
+		}
 		_ = os.Remove(p + ".lock")
 		return out(map[string]any{"ok": true})
 	})
