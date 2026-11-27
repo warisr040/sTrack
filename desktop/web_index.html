@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-Znepzuf4Px8Q5E4xBe3aXTFhWoHNJEhZEMBhMf1fgWI='; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-176exmNlpcFZELVCTENhe7a3sAkkKuSaHnoyakf13wY='; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>sTrack 3.5 — simply handle IT Track</title>
@@ -2646,17 +2646,84 @@ function sheetXml(rows) {
   const x = v => String(v).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="${H}" topLeftCell="A${H + 1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>${colsXml(rows)}<sheetData>${rows.map((r, i) => `<row r="${i + 1}">${r.map((v, j) => v === '' || v == null ? '' : typeof v === 'number' ? `<c r="${col(j)}${i + 1}"${i < H ? ' s="1"' : ''}><v>${v}</v></c>` : `<c r="${col(j)}${i + 1}" t="inlineStr"${i < H ? ' s="1"' : ''}><is><t xml:space="preserve">${x(v)}</t></is></c>`).join('')}</row>`).join('')}</sheetData></worksheet>`;
 }
+// Excel styles made on demand: index 0 = normal, 1 = bold (used by the plain table sheets)
+function xlStyles() {
+  const fonts = ['<font><sz val="11"/><name val="Calibri"/></font>', '<font><b/><sz val="11"/><name val="Calibri"/></font>'];
+  const fills = ['<fill><patternFill patternType="none"/></fill>', '<fill><patternFill patternType="gray125"/></fill>'];
+  const borders = ['<border><left/><right/><top/><bottom/><diagonal/></border>'];
+  const xfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>', '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>'];
+  const idx = (a, v) => { let i = a.indexOf(v); if (i < 0) { a.push(v); i = a.length - 1; } return i; };
+  return {
+    get(o = {}) { // { b, i, size, color, fill, bottom, left, top, date, align, indent }
+      const font = idx(fonts, `<font>${o.b ? '<b/>' : ''}${o.i ? '<i/>' : ''}<sz val="${o.size || 11}"/>${o.color ? `<color rgb="FF${o.color}"/>` : ''}<name val="Calibri"/></font>`);
+      const fill = o.fill ? idx(fills, `<fill><patternFill patternType="solid"><fgColor rgb="FF${o.fill}"/><bgColor indexed="64"/></patternFill></fill>`) : 0;
+      const side = (k, c, w) => c ? `<${k} style="${w}"><color rgb="FF${c}"/></${k}>` : `<${k}/>`;
+      const border = o.bottom || o.left || o.top ? idx(borders, `<border>${side('left', o.left, 'medium')}<right/>${side('top', o.top, 'thin')}${side('bottom', o.bottom, o.bw || 'thick')}<diagonal/></border>`) : 0;
+      const al = o.align || o.indent ? `<alignment${o.align ? ` horizontal="${o.align}"` : ''}${o.indent ? ` indent="${Math.min(15, o.indent)}"` : ''} vertical="center"/>` : '';
+      return idx(xfs, `<xf numFmtId="${o.date ? 164 : 0}" fontId="${font}" fillId="${fill}" borderId="${border}" xfId="0"${o.date ? ' applyNumberFormat="1"' : ''} applyFont="1"${fill ? ' applyFill="1"' : ''}${border ? ' applyBorder="1"' : ''}${al ? ` applyAlignment="1">${al}</xf>` : '/>'}`);
+    },
+    xml() { return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy-mm-dd"/></numFmts><fonts count="${fonts.length}">${fonts.join('')}</fonts><fills count="${fills.length}">${fills.join('')}</fills><borders count="${borders.length}">${borders.join('')}</borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join('')}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`; },
+  };
+}
+const xlCol = i => { let s = ''; i++; while (i) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = (i - m - 1) / 26; } return s; };
+const xlTxt = v => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+// The Gantt as an Excel sheet: task columns, then one column per day (one per week for long plans) with the bars in colour.
+function ganttSheetXml(st) {
+  const Y = { plan: 'A5B4FC', done: '4F46E5', grp: '94A3B8', grpDone: '334155', late: 'FCA5A5', lateDone: 'DC2626', we: 'F1F5F9', hol: 'E2E8F0', act: '059669', today: 'DC2626', head: 'F8FAFC', ms: '4F46E5' };
+  const ts = P.tasks.filter(t => C.plan.get(t.id) || C.act.get(t.id) || true), today = todayN(), cust = !!ui.cust;
+  let a = Infinity, b = -Infinity;
+  for (const t of ts) for (const q of [C.plan.get(t.id), C.act.get(t.id)]) if (q) { a = Math.min(a, q.s); b = Math.max(b, q.e); }
+  if (!isFinite(a)) { a = today; b = today + 30; }
+  const weekly = b - a > 270; if (weekly) { a = mondayOf(a); } else a = a - 1; b = b + (weekly ? 7 : 2);
+  const slots = []; for (let n = a; n <= b && slots.length < 400; n += weekly ? 7 : 1) slots.push({ a: n, b: weekly ? n + 6 : n });
+  const showPic = !cust || P.custPic, F = 8; // fixed columns A..H
+  const H = st.get({ b: true, fill: Y.head, align: 'center', bottom: 'CBD5E1', bw: 'thin' }), HL = st.get({ b: true, fill: Y.head, bottom: 'CBD5E1', bw: 'thin' });
+  const rowsX = [], c = (r, j, v, s, num) => v === '' || v == null ? (s ? `<c r="${xlCol(j)}${r}" s="${s}"/>` : '') : num ? `<c r="${xlCol(j)}${r}"${s ? ` s="${s}"` : ''}><v>${v}</v></c>` : `<c r="${xlCol(j)}${r}" t="inlineStr"${s ? ` s="${s}"` : ''}><is><t xml:space="preserve">${xlTxt(v)}</t></is></c>`;
+  // title rows
+  rowsX.push(`<row r="1">${c(1, 0, P.name || 'Project', st.get({ b: true, size: 14 }))}${c(1, F, '', 0)}${slots.map((s, i) => { const d = new Date(s.a * 864e5); return (i === 0 || d.getUTCDate() <= (weekly ? 7 : 1)) ? c(1, F + i, d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' }), st.get({ b: true })) : ''; }).join('')}</row>`);
+  rowsX.push(`<row r="2">${c(2, 0, `Exported ${fmtL(today)} from ${APP.nick} ${APP.ver}${weekly ? ' · one column per week' : ''}`, st.get({ i: true, color: '64748B' }))}${slots.map((s, i) => c(2, F + i, new Date(s.a * 864e5).getUTCDate(), st.get({ align: 'center', size: 9, color: s.a <= today && today <= s.b ? Y.today : '64748B', b: s.a <= today && today <= s.b })), 1).join('')}</row>`);
+  const head = ['#', 'WBS', 'Task', showPic ? 'PIC' : '', 'Start', 'End', 'Days', 'Done %'];
+  rowsX.push(`<row r="3">${head.map((h, j) => c(3, j, h, j === 2 || j === 3 ? HL : H)).join('')}${slots.map((s, i) => { const td = s.a <= today && today <= s.b; return c(3, F + i, weekly ? 'W' : 'SMTWTFS'[dow(s.a) === 0 ? 0 : dow(s.a)], st.get({ align: 'center', size: 9, b: td, color: td ? Y.today : '64748B', fill: td ? 'FEE2E2' : Y.head, bottom: 'CBD5E1', bw: 'thin' })); }).join('')}</row>`);
+  let r = 4;
+  for (const t of ts) {
+    const q = C.plan.get(t.id), ac = C.act.get(t.id), sum = grp(t), pr = Math.round(C.prog.get(t.id) || 0), late = !sum && C.attn(t) === 'late', point = q && (q.ms || q.ev);
+    let cut = -Infinity; // the done part of the bar: the first pr% of its working days
+    if (q && !point && pr > 0) { const wd = []; for (let n = q.s; n <= q.e; n++) if (C.cal.isW(n)) wd.push(n); cut = pr >= 100 ? q.e : (wd[Math.round(wd.length * pr / 100) - 1] ?? -Infinity); }
+    const days = q ? (point ? 0 : t.type === 'task' && !sum ? num(t.days) || 1 : C.cal.count(q.s, q.e)) : '';
+    let x = c(r, 0, t._i + 1, 0, 1) + c(r, 1, t._wbs) + c(r, 2, t.type === 'sprint' ? '▸ ' + tName(t) : tName(t), st.get({ b: sum, indent: t.level - 1 })) + (showPic && !sum ? c(r, 3, picWho(t, true)) : '');
+    x += q ? c(r, 4, q.s + 25569, st.get({ date: true }), 1) + c(r, 5, q.e + 25569, st.get({ date: true }), 1) : '';
+    x += c(r, 6, days, 0, days !== '') + c(r, 7, pr, 0, 1);
+    slots.forEach((s, i) => {
+      const inPlan = q && !point && q.s <= s.b && q.e >= s.a, inAct = ac && !(ac.ms || ac.ev) && ac.s <= s.b && ac.e >= s.a, td = s.a <= today && today <= s.b;
+      const isPt = point && q.s >= s.a && q.s <= s.b, we = !weekly && !C.cal.isW(s.a), hol = !weekly && C.cal.hol.has(s.a);
+      const o = {}; if (inPlan) o.fill = sum ? (s.a <= cut ? Y.grpDone : Y.grp) : late ? (s.a <= cut ? Y.lateDone : Y.late) : (s.a <= cut ? Y.done : Y.plan); else if (hol) o.fill = Y.hol; else if (we) o.fill = Y.we;
+      if (inAct && !sum) o.bottom = Y.act; if (td) o.left = Y.today;
+      if (isPt) { o.align = 'center'; o.b = true; o.color = t.type === 'event' ? 'D97706' : Y.ms; }
+      const sty = Object.keys(o).length ? st.get(o) : 0;
+      x += isPt ? c(r, F + i, t.type === 'event' ? '★' : '◆', sty) : sty ? c(r, F + i, '', sty) : '';
+    });
+    rowsX.push(`<row r="${r}">${x}</row>`); r++;
+  }
+  r++; // legend
+  const leg = [['Plan', { fill: Y.plan }], ['Done', { fill: Y.done }], ['Late', { fill: Y.late }], ['Summary', { fill: Y.grp }], ['Actual (green underline)', { bottom: Y.act }], ['Milestone ◆', null], ['Weekend / holiday', { fill: Y.we }], ['Today (red line)', { left: Y.today }]];
+  rowsX.push(`<row r="${r}">${c(r, 2, 'Legend', st.get({ b: true }))}</row>`); r++;
+  for (const [l, o] of leg) { rowsX.push(`<row r="${r}">${o ? c(r, 1, '', st.get(o)) : c(r, 1, '◆', st.get({ b: true, color: Y.ms, align: 'center' }))}${c(r, 2, l)}</row>`); r++; }
+  const widths = [5, 8, 42, 18, 11, 11, 6, 7];
+  const cols = `<cols>${widths.map((w, j) => `<col min="${j + 1}" max="${j + 1}" width="${w}" customWidth="1"/>`).join('')}<col min="${F + 1}" max="${F + slots.length}" width="${weekly ? 4.2 : 2.9}" customWidth="1"/></cols>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0" tabSelected="1"><pane xSplit="${F}" ySplit="3" topLeftCell="${xlCol(F)}4" activePane="bottomRight" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="16"/>${cols}<sheetData>${rowsX.join('')}</sheetData></worksheet>`;
+}
 function exportXLSX(only, suffix) {
   const team = [['Name (' + P.lang.a + ')', 'Name (' + P.lang.b + ')', 'Nickname', 'Role', 'Contact', 'MH per day', 'Active'], ...P.members.map(m => [m.name, m.name2, m.nick || '', m.role, m.email, m.cap === '' ? '' : num(m.cap), m.active !== false ? 'Yes' : 'No'])];
   const logs = [['Date', 'Task #', 'Task', 'Member', 'MH', 'Note'], ...P.logs.slice().sort((a, b) => a.date < b.date ? -1 : 1).map(l => { const t = C.byId.get(l.task); return [l.date, t ? t._i + 1 : '', t ? tName(t) : '', (C.mem.get(l.member) || {}).name || '', logA(l), l.note || '']; })];
-  const sheets = only || [['Tasks', taskTable()], ['Team', team], ['Timesheet', logs]];
+  const st = xlStyles(), sheets = only || [['Gantt', null, ganttSheetXml(st)], ['Tasks', taskTable()], ['Team', team], ['Timesheet', logs]];
   const files = [
     ['[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`],
     ['_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
     ['xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map(([n], i) => `<sheet name="${n}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`],
     ['xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
-    ['xl/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`],
-    ...sheets.map(([, rows], i) => [`xl/worksheets/sheet${i + 1}.xml`, sheetXml(rows)]),
+    ['xl/styles.xml', st.xml()],
+
+    ...sheets.map(([, rows, xml], i) => [`xl/worksheets/sheet${i + 1}.xml`, xml || sheetXml(rows)]),
   ];
   download(zipStore(files), fileName(suffix || '.xlsx')).then(ok => ok && toast('Excel file saved'));
 }
@@ -2727,7 +2794,7 @@ function importRows(rows, mode) {
     t.days = t.type === 'task' ? Math.max(1, Math.round(num(val(r, 'days'))) || 1) : 0;
     t.mh = val(r, 'mh') === '' ? '' : num(val(r, 'mh')); t.progress = clamp(Math.round(num(String(val(r, 'done')).replace('%', ''))), 0, 100);
     if (t.progress >= 100) t.status = 'done'; else if (t.progress > 0 && t.status === 'todo') t.status = 'doing';
-    t.aDays = val(r, 'aDays') === '' ? '' : num(val(r, 'aDays')); t.note = String(val(r, 'note') || '');
+    { const v = val(r, 'aDays'); t.aDays = v === '' || v == null ? '' : num(v); } t.note = String(val(r, 'note') || '');
     for (const pn of String(val(r, 'pic') || '').split(/[,;/、，]+/).map(x => x.trim()).filter(Boolean)) { let m = memByName.get(pn.toLowerCase()); if (!m) { m = newMember({ name: pn }); P.members.push(m); memByName.set(pn.toLowerCase(), m); made.m++; } t.pic.push(m.id); }
     const sn = String(val(r, 'sprint') || '').trim(); if (sn) { let s = spByName.get(sn.toLowerCase()); if (!s) { s = { id: uid(), name: sn, start: '', end: '', goal: '', u: 0, by: '' }; P.sprints.push(s); spByName.set(sn.toLowerCase(), s); made.s++; } t.sprint = s.id; }
     rowNo.set(ix.num >= 0 && num(val(r, 'num')) ? num(val(r, 'num')) : i + 1, t); deps.push([t, String(val(r, 'after') || '')]); tasks.push(t);
@@ -2748,7 +2815,7 @@ function openImport(file) {
     } catch (e) { toast('Import failed: ' + e.message); }
   };
   const m = openModal(`<div class="phead"><h2>Import ${esc(file.name)}</h2><button class="xbtn" data-a="close" aria-label="Close">×</button></div>
-    <p class="sub">Columns are matched by their names in the first row, the same as an exported file: Level or WBS, Name, second name, Type, Status, PIC, Sprint, Start, Days, MH, After, Done %, Actual start, Actual days, Note. People and sprints that don't exist yet are created.</p>
+    <p class="sub">From a file exported by sTrack, the <b>Tasks</b> sheet is read (edit tasks there; the Gantt sheet is only a picture of the plan). Columns are matched by their names in the first row, the same as an exported file: Level or WBS, Name, second name, Type, Status, PIC, Sprint, Start, Days, MH, After, Done %, Actual start, Actual days, Note. People and sprints that don't exist yet are created.</p>
     <div class="mfoot"><button class="b sm line" data-a="append">Add to the end of the plan</button><button class="b sm primary" data-a="replace">Replace all tasks</button></div>`, 'solid');
   m.addEventListener('click', e => { const a = e.target.closest('[data-a]'); if (!a) return; if (a.dataset.a === 'close') return closeModal(); if (a.dataset.a === 'replace' && P.tasks.length && !confirmBox('Replace every task in the plan with the file? You can undo this.')) return; go(a.dataset.a); });
 }
@@ -3399,7 +3466,7 @@ $('#bHelp').onclick = () => togglePop('helpPop', 'bHelp', 520, renderHelp);
 $('#bNew').onclick = () => openNewProject();
 $('#bTpl').onclick = () => openTemplate();
 $('#bSave').onclick = saveFile;
-$('#bOpen').onclick = e => { const r = e.currentTarget.getBoundingClientRect(); showMenu(r.left - 160, r.bottom + 6, MI('f-open', 'Open a plan file…', 'Ctrl+O') + MI('f-imp', 'Import from Excel or CSV…') + '<hr>' + MI('f-merge', 'Merge from a plan file…') + MI('f-bk', 'Back up now', 'Alt+K') + MI('f-bks', 'Backups…') + '<hr>' + MI('f-xlsx', 'Export to Excel (.xlsx)') + MI('f-csv', 'Export tasks to CSV') + MI('f-save', 'Save a copy (.json)', 'Ctrl+S')); };
+$('#bOpen').onclick = e => { const r = e.currentTarget.getBoundingClientRect(); showMenu(r.left - 160, r.bottom + 6, MI('f-open', 'Open a plan file…', 'Ctrl+O') + MI('f-imp', 'Import from Excel or CSV…') + '<hr>' + MI('f-merge', 'Merge from a plan file…') + MI('f-bk', 'Back up now', 'Alt+K') + MI('f-bks', 'Backups…') + '<hr>' + MI('f-xlsx', 'Export to Excel: Gantt + tasks (.xlsx)') + MI('f-csv', 'Export tasks to CSV') + MI('f-save', 'Save a copy (.json)', 'Ctrl+S')); };
 $('#bLock').onclick = openLock; $('#bParked').onclick = openParked;
 $('#dbPill').onclick = () => DB.state === 'need' ? dbRegrant() : DB.state === 'key' ? dbAskKey() : openDbDialog();
 $('#file').addEventListener('change', e => {
